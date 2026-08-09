@@ -26,7 +26,7 @@ import sys
 
 
 # 平台无参启动时运行的 agent —— 换 agent 就改这里(本地调试也可用命令行参数覆盖)。
-DEFAULT_AGENT = "example_agent"
+DEFAULT_AGENT = "chassis_agent"
 
 
 def main():
