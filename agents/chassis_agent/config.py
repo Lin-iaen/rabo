@@ -34,9 +34,17 @@ LLM_MODEL = "qwen3.6-flash"     # 复杂推理/代码可换 qwen3.6-plus
 LLM_API_KEY = os.getenv("RABO_LLM_KEY", "")
 
 # ── 无输入源方案：启动时发给 agent 的演示指令 ─────────────────────────
-# 开放式指令: 让 LLM 自由发挥 (阶段 A)。后续接面板后改走 REMOTE_ID 输入, 此项失效。
+# 开放式指令: 让 LLM 自由发挥 (阶段 A)。当下面 REMOTE_ID 配置后, 此指令不再使用。
 DEMO_TEXT = (
     "自由发挥：不要调用 run_demo_sequence，自己设计一套有创意的移动动作并执行"
     "（例如平移、斜行、原地自转、短暂停顿的组合，也可以连续走一段再变换方向）。"
     "中途可以调用 get_status 观察位姿，最后汇报你的设计思路和结果。"
 )
+
+# ── 平台控制面板（H5 遥控面板, 作为 agent 的输入/输出通道, 阶段 B）──
+# 留空 = 无输入源, run() 走上面的 DEMO_TEXT 一次性演示;
+# 填上 = run() 改为常驻监听面板对话, 收到文字 → agent 处理 → 回复回传到面板。
+# 在场景里创建 H5 遥控面板, 面板 ID 填 REMOTE_ID, 面板内 chat 控件 ID 填 CHAT_CONTROL_ID。
+# RemoteControl 的 WebSocket 地址 RABO_REMOTE_WS_URL 由平台运行环境自动注入, 无需配置。
+REMOTE_ID = "cd49223f86e236c29f9f5ea6876e39307"
+CHAT_CONTROL_ID = "chat-v1"
