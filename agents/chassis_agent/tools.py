@@ -253,13 +253,13 @@ def _discover_world(agent):
 
     node = Node(f"world_probe_{os.getpid()}")
     try:
-        names, _ = node.get_service_names_and_types()
+        services = node.get_service_names_and_types()  # [(name, [types]), ...]
     finally:
         node.destroy_node()
     marker = "/world/"
-    for n in names:
-        if n.startswith(marker) and n.endswith("/set_pose"):
-            return n[len(marker):-len("/set_pose")]
+    for name, _types in services:
+        if name.startswith(marker) and name.endswith("/set_pose"):
+            return name[len(marker):-len("/set_pose")]
     raise RuntimeError(
         "未找到 /world/<name>/set_pose 服务, 无法自动发现 Gazebo world。"
         "请在 agents/chassis_agent/config.py 里设置 WORLD = '<world名>'。"
