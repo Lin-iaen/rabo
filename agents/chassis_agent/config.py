@@ -59,9 +59,11 @@ WORLD = ""
 CAMERA_IMAGE_TOPIC = "rd43088_tp_rgbd_d724d13b23/image"
 
 # ── 赛道跟随 (寻迹) 参数 ─────────────────────────────────────────────
-TRACK_STEP_M = 0.3              # 闭环每步平移距离 (米), 越短越跟得紧/越慢
-TRACK_MAX_STEER_DEG = 30        # 最大转向角 (度), 路面偏移映射的上限
+TRACK_STEP_M = 0.2              # 闭环每步直行距离 (米), 越短越跟得紧/越平滑
+TRACK_MAX_STEER_DEG = 30        # 单步最大转向 (度)
 TRACK_LOST_STEPS = 5            # 连续多少步看不到路面判定为偏出赛道
+TRACK_ROTATE_TOL_DEG = 2.0      # 转向到位容差 (度, 里程计闭环)
+TRACK_STEER_SMOOTH = 0.6        # 转向 EMA 平滑系数 (0~1, 越大越跟手/越抖)
 
 # ── 赛道感知校准 (HSV 阈值) ──────────────────────────────────────────
 # 场景: 灰黑柏油路面 + 白色边界线 + 黑白相间路缘 + 绿色草坪背景。
@@ -69,7 +71,7 @@ TRACK_LOST_STEPS = 5            # 连续多少步看不到路面判定为偏出�
 CAMERA_DEBUG_DIR = "/tmp/chassis_cam_debug"
 
 VISION = {
-    "steer_band": (0.05, 0.45),   # 上/中段 (y 归一化): 灰色质心主转向信号
+    "steer_band": (0.10, 0.55),   # 转向信号带 (y 归一化): 灰质心主转向, 含弯道延续
     "bottom_y": 0.60,             # 底部段起点: "是否在路上" + "是否贴近边线"
     "grass_h_range": (35, 85),    # 草坪色相区间
     "grass_s_min": 60,
@@ -80,7 +82,7 @@ VISION = {
     "white_s_max": 60,            # 白线: 饱和度上限
     "white_v_min": 190,           # 白线: 明度下限
     "road_visible_fraction": 0.10, # 底部灰占比下限 → 否则判偏出
-    "edge_white_frac": 0.03,      # 底部白线占比高于此 → 贴近边线
-    "edge_bias_deg": 25,          # 贴近边线时向赛道内的纠正 (度)
+    "edge_white_frac": 0.05,      # 底部白线占比高于此才考虑边线纠正 (防误报)
+    "edge_bias_deg": 15,          # 贴近边线时向赛道内的纠正 (度, 已减弱)
     "max_steer_deg": TRACK_MAX_STEER_DEG,
 }

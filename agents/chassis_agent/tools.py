@@ -385,20 +385,45 @@ def _camera_probe(agent, args):
     )
 
 
+def _rotate_abs(agent, target_deg):
+    """基于里程计闭环旋转到绝对朝向 target_deg (度, 0=世界系正前)。
+
+    解决 timed-rotate 的角度漂移; 返回旋转后的实际朝向 (度)。
+    """
+    tol = config.TRACK_ROTATE_TOL_DEG
+    for _ in range(80):
+        _, _, theta = agent.base.get_odometry()
+        cur = math.degrees(theta)
+        delta = (target_deg - cur + 180.0) % 360.0 - 180.0   # -180..180
+        if abs(delta) <= tol:
+            break
+        w = math.copysign(config.DEFAULT_ANGULAR_SPEED, math.radians(delta))
+        agent.base.rotate(w, blocking=False)
+        time.sleep(0.15)
+    agent.base.stop()
+    return math.degrees(agent.base.get_odometry()[2])
+
+
 def _follow_track(agent, args):
-    """闭环寻迹: 反复"看相机 → 按赛道中心转向 → 前移一小步", 持续指定秒数。"""
+    """闭环寻迹: 每步"看相机 → 转到目标朝向 → 直行一小段", 持续指定秒数。
+
+    用「先转向再直行」而非斜向平移: 车头随弯道转, 相机始终对着路, 不会丢画面;
+    转向角用 EMA 平滑, 轨迹是弧线而不是楼梯。
+    """
     from drivers import detect_road
 
     duration = args["seconds"]
     step = config.TRACK_STEP_M
     max_steer = config.TRACK_MAX_STEER_DEG
     lost_limit = config.TRACK_LOST_STEPS
+    smooth = config.TRACK_STEER_SMOOTH
 
     start = time.time()
     dist = 0.0
     steps = 0
     lost = 0
     steer_sum = 0.0
+    prev_steer = 0.0
 
     while time.time() - start < duration:
         frame = agent.camera.get_frame()
@@ -428,20 +453,27 @@ def _follow_track(agent, args):
             continue
 
         lost = 0
-        steer = det["steer_angle_deg"] or 0.0
-        eff_offset = det["road_offset"]
-        max_steer = config.TRACK_MAX_STEER_DEG
+        raw_steer = det["steer_angle_deg"] or 0.0
+        steer = smooth * raw_steer + (1.0 - smooth) * prev_steer   # EMA 平滑
         steer = max(-max_steer, min(max_steer, steer))
-        ok = agent.base.move_distance(math.radians(steer), step)
+        prev_steer = steer
+
+        # 先原地转向到目标朝向, 再直行一小段
+        _, _, theta = agent.base.get_odometry()
+        target = math.degrees(theta) + steer
+        _rotate_abs(agent, target)
+        ok = agent.base.move_distance(0.0, step)
         if not ok:
             agent.base.stop()
             return f"第 {steps + 1} 步移动失败, 已停车。"
         dist += step
         steps += 1
         steer_sum += abs(steer)
+
+        _, _, theta = agent.base.get_odometry()
         agent.logger.info(
-            f"[track] 步{steps} 偏移{eff_offset:+.2f} 转向{steer:+.1f}° "
-            f"(白线={'有' if det['white_ok'] else '无'}, 边纠{det['edge_bias']:+.0f}°) "
+            f"[track] 步{steps} 偏移{det['road_offset'] if det['road_offset'] is not None else 0:+.2f} "
+            f"转向{steer:+.1f}° (边纠{det['edge_bias']:+.0f}°) 朝向{math.degrees(theta):.0f}° "
             f"底灰{det['road_fraction']:.0%} 上灰{det['far_fraction']:.0%}"
         )
 

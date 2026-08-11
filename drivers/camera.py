@@ -59,7 +59,7 @@ def decode_image(msg):
 #   3) 「上段」两条白线成对可见时, 用其中点精修转向角。
 
 _DEFAULTS = {
-    "steer_band": (0.05, 0.45),   # 上/中段 (y 归一化): 灰色质心主转向信号
+    "steer_band": (0.10, 0.55),   # 转向信号带 (y 归一化): 灰质心主转向, 含弯道延续
     "bottom_y": 0.60,             # 底部段起点: "是否在路上" + "是否贴近边线"
     "grass_h_range": (35, 85),    # 草坪色相区间
     "grass_s_min": 60,
@@ -70,8 +70,8 @@ _DEFAULTS = {
     "white_s_max": 60,            # 白线: 饱和度上限
     "white_v_min": 190,           # 白线: 明度下限
     "road_visible_fraction": 0.10, # 底部灰占比低于此 → 判偏出
-    "edge_white_frac": 0.03,      # 底部白线占比高于此 → 判定贴近边线
-    "edge_bias_deg": 25,          # 贴近边线时的附加纠正 (度)
+    "edge_white_frac": 0.05,      # 底部白线占比高于此才考虑边线纠正 (防误报)
+    "edge_bias_deg": 15,          # 贴近边线时向赛道内的纠正 (度)
     "max_steer_deg": 30,
 }
 
@@ -152,8 +152,9 @@ def detect_road(bgr, vision=None):
         wcols = np.where(bottom_white.any(axis=0))[0]
         if len(wcols):
             wcx = float(wcols.mean()) / bottom_white.shape[1]
-            # 白线偏左 → 车贴近左边界 → 右转(负); 反之为左转
-            edge_bias = round(-p["edge_bias_deg"] * (0.5 - wcx) * 2.0, 1)
+            # 白线明显偏到一侧 (车贴近该侧边界) 才施加向赛道内的纠正, 防误报
+            if wcx < 0.35 or wcx > 0.65:
+                edge_bias = round(-p["edge_bias_deg"] * (0.5 - wcx) * 2.0, 1)
 
     # ── 上/中段: 灰色质心 (主转向信号) ──────────────────────
     sy0, sy1 = int(h * p["steer_band"][0]), int(h * p["steer_band"][1])
@@ -161,7 +162,7 @@ def detect_road(bgr, vision=None):
     bw = band_gray.shape[1]
     far_frac = float(band_gray.sum()) / band_gray.size
     far_offset = far_steer = None
-    if band_gray.sum() > band_gray.size * 0.02:
+    if band_gray.sum() > band_gray.size * 0.005:
         cols = np.where(band_gray.any(axis=0))[0]
         cx = float(cols.mean()) / bw
         far_offset = (cx - 0.5) * 2.0
