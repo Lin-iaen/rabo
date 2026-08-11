@@ -62,3 +62,22 @@ CAMERA_IMAGE_TOPIC = "rd43088_tp_rgbd_d724d13b23/image"
 TRACK_STEP_M = 0.3              # 闭环每步平移距离 (米), 越短越跟得紧/越慢
 TRACK_MAX_STEER_DEG = 30        # 最大转向角 (度), 路面偏移映射的上限
 TRACK_LOST_STEPS = 5            # 连续多少步看不到路面判定为偏出赛道
+
+# ── 赛道感知校准 (HSV 阈值) ──────────────────────────────────────────
+# 场景: 灰黑柏油路面 + 白色边界线 + 黑白相间路缘 + 绿色草坪背景。
+# 用 camera_probe 工具看当前画面各颜色占比, 再回来调这里。
+CAMERA_DEBUG_DIR = "/tmp/chassis_cam_debug"
+
+VISION = {
+    "roi_bottom": 0.55,            # 底部 ROI 比例 (近处地面最可靠)
+    "grass_h_range": (35, 85),     # 草坪色相区间
+    "grass_s_min": 60,
+    "grass_v_min": 60,
+    "asphalt_s_max": 60,           # 沥青: 饱和度上限
+    "asphalt_v_min": 40,           # 沥青: 明度下限
+    "asphalt_v_max": 200,          # 沥青: 明度上限 (排除白线)
+    "white_s_max": 60,             # 白线: 饱和度上限
+    "white_v_min": 190,            # 白线: 明度下限
+    "road_visible_fraction": 0.10, # 灰路面占比下限
+    "max_steer_deg": TRACK_MAX_STEER_DEG,
+}

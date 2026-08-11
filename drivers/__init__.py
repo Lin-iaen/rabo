@@ -30,6 +30,12 @@
     4. 在 agent 里:               from drivers import MyCamera
 """
 
-from .camera import CameraNode, decode_image, detect_road
+from .camera import (
+    CameraNode,
+    decode_image,
+    detect_road,
+    probe_scene,
+    save_debug,
+)
 
-__all__ = ["CameraNode", "decode_image", "detect_road"]
+__all__ = ["CameraNode", "decode_image", "detect_road", "probe_scene", "save_debug"]

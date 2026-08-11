@@ -142,8 +142,18 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "camera_probe",
+            "description": "调试工具: 报告当前画面里绿草/灰沥青/白线/暗部/其它颜色的像素占比, "
+                           "并把当前帧与各类掩码存成 PNG。当相机判断不准(一直说居中但实际偏出)时用, "
+                           "用于校准赛道颜色阈值。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "follow_track",
-            "description": "沿柏油赛道自动跟随行驶指定秒数 (闭环寻迹): 持续看相机把路面保持在"
+            "description": "沿柏油赛道自动跟随行驶指定秒数 (闭环寻迹): 持续看相机把赛道保持在"
                            "视野中央, 若偏出赛道会自动停车并说明。完成后返回行驶距离与当前位姿。",
             "parameters": {
                 "type": "object",
@@ -343,12 +353,37 @@ def _camera_view(agent, args):
             f"相机还没收到图像 (topic={config.CAMERA_IMAGE_TOPIC})。"
             "请确认场景里相机已开启、话题名与 config.CAMERA_IMAGE_TOPIC 一致。"
         )
-    det = detect_road(frame)
+    det = detect_road(frame, config.VISION)
     return det["status"]
 
 
+def _camera_probe(agent, args):
+    """调试工具: 报告画面颜色统计 + 保存当前帧与掩码 PNG, 用于校准 HSV 阈值。"""
+    from drivers import detect_road, probe_scene, save_debug
+
+    frame = agent.camera.get_frame()
+    if frame is None:
+        return (
+            f"相机还没收到图像 (topic={config.CAMERA_IMAGE_TOPIC})。"
+            "请确认场景里相机已开启、话题名与 config.CAMERA_IMAGE_TOPIC 一致。"
+        )
+    stats = probe_scene(frame, config.VISION)
+    det = detect_road(frame, config.VISION)
+    try:
+        paths = save_debug(frame, config.VISION, outdir=config.CAMERA_DEBUG_DIR)
+        saved = f"调试图已存: {paths[0]} (另含 asphalt/white/grass 掩码)"
+    except Exception as e:  # noqa: BLE001
+        saved = f"保存调试图失败: {e}"
+
+    return (
+        f"画面 {stats['image'][0]}x{stats['image'][1]} (ROI=底部{config.VISION['roi_bottom']:.0%}): "
+        f"绿草 {stats['green_pct']}% / 灰沥青 {stats['asphalt_pct']}% / 白线 {stats['white_pct']}% / "
+        f"暗部 {stats['dark_pct']}% / 其它 {stats['other_pct']}% | {det['status']} | {saved}"
+    )
+
+
 def _follow_track(agent, args):
-    """闭环寻迹: 反复"看相机 → 按路面偏移转向 → 前移一小步", 持续指定秒数。"""
+    """闭环寻迹: 反复"看相机 → 按赛道中心转向 → 前移一小步", 持续指定秒数。"""
     from drivers import detect_road
 
     duration = args["seconds"]
@@ -372,18 +407,21 @@ def _follow_track(agent, args):
             time.sleep(0.2)
             continue
 
-        det = detect_road(frame)
+        det = detect_road(frame, config.VISION)
         if not det["road_visible"]:
             lost += 1
             if lost >= lost_limit:
                 agent.base.stop()
-                return ("已偏出赛道: 连续多步看不到柏油路面, 已停车。"
-                        "建议先用 get_status 确认位置, 再 reset_position 或倒回。")
+                return ("已偏出赛道: 连续多步看不到赛道 (灰路面/白边线都不足), 已停车。"
+                        "建议先用 get_status 确认位置, 再用 camera_probe 看画面颜色, "
+                        "或 reset_position 回起点。")
             time.sleep(0.2)
             continue
 
         lost = 0
+        # 优先白边线中线, 退化为灰质心
         steer = det["steer_angle_deg"] or 0.0
+        eff_offset = det["white_center"] if det["white_ok"] else det["road_offset"]
         steer = max(-max_steer, min(max_steer, steer))
         ok = agent.base.move_distance(math.radians(steer), step)
         if not ok:
@@ -392,6 +430,11 @@ def _follow_track(agent, args):
         dist += step
         steps += 1
         steer_sum += abs(steer)
+        agent.logger.info(
+            f"[track] 步{steps} 偏移{eff_offset:+.2f} 转向{steer:+.1f}° "
+            f"(白线={'有' if det['white_ok'] else '无'}) "
+            f"灰{det['road_fraction']:.0%} 白{det['white_fraction']:.0%}"
+        )
 
     agent.base.stop()
     avg_steer = (steer_sum / steps) if steps else 0.0
@@ -417,6 +460,7 @@ _HANDLERS = {
     "reset_position": _reset_position,
     "teleport": _teleport,
     "camera_view": _camera_view,
+    "camera_probe": _camera_probe,
     "follow_track": _follow_track,
 }
 
