@@ -69,15 +69,18 @@ TRACK_LOST_STEPS = 5            # 连续多少步看不到路面判定为偏出�
 CAMERA_DEBUG_DIR = "/tmp/chassis_cam_debug"
 
 VISION = {
-    "roi_bottom": 0.55,            # 底部 ROI 比例 (近处地面最可靠)
-    "grass_h_range": (35, 85),     # 草坪色相区间
+    "steer_band": (0.05, 0.45),   # 上/中段 (y 归一化): 灰色质心主转向信号
+    "bottom_y": 0.60,             # 底部段起点: "是否在路上" + "是否贴近边线"
+    "grass_h_range": (35, 85),    # 草坪色相区间
     "grass_s_min": 60,
     "grass_v_min": 60,
-    "asphalt_s_max": 60,           # 沥青: 饱和度上限
-    "asphalt_v_min": 40,           # 沥青: 明度下限
-    "asphalt_v_max": 200,          # 沥青: 明度上限 (排除白线)
-    "white_s_max": 60,             # 白线: 饱和度上限
-    "white_v_min": 190,            # 白线: 明度下限
-    "road_visible_fraction": 0.10, # 灰路面占比下限
+    "asphalt_s_max": 60,          # 沥青: 饱和度上限
+    "asphalt_v_min": 40,          # 沥青: 明度下限
+    "asphalt_v_max": 200,         # 沥青: 明度上限 (排除白线)
+    "white_s_max": 60,            # 白线: 饱和度上限
+    "white_v_min": 190,           # 白线: 明度下限
+    "road_visible_fraction": 0.10, # 底部灰占比下限 → 否则判偏出
+    "edge_white_frac": 0.03,      # 底部白线占比高于此 → 贴近边线
+    "edge_bias_deg": 25,          # 贴近边线时向赛道内的纠正 (度)
     "max_steer_deg": TRACK_MAX_STEER_DEG,
 }

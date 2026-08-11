@@ -375,10 +375,13 @@ def _camera_probe(agent, args):
     except Exception as e:  # noqa: BLE001
         saved = f"保存调试图失败: {e}"
 
+    def fmt(band):
+        s = stats[band]
+        return (f"{band}: 草{s['green']}% 灰{s['asphalt']}% 白{s['white']}% 暗{s['dark']}%")
+
     return (
-        f"画面 {stats['image'][0]}x{stats['image'][1]} (ROI=底部{config.VISION['roi_bottom']:.0%}): "
-        f"绿草 {stats['green_pct']}% / 灰沥青 {stats['asphalt_pct']}% / 白线 {stats['white_pct']}% / "
-        f"暗部 {stats['dark_pct']}% / 其它 {stats['other_pct']}% | {det['status']} | {saved}"
+        f"画面 {stats['image'][0]}x{stats['image'][1]} | {fmt('bottom')} | "
+        f"{fmt('steer_band')} | {det['status']} | {saved}"
     )
 
 
@@ -412,16 +415,22 @@ def _follow_track(agent, args):
             lost += 1
             if lost >= lost_limit:
                 agent.base.stop()
-                return ("已偏出赛道: 连续多步看不到赛道 (灰路面/白边线都不足), 已停车。"
+                try:
+                    from drivers import save_debug
+                    save_debug(frame, config.VISION, outdir=config.CAMERA_DEBUG_DIR)
+                except Exception:  # noqa: BLE001
+                    pass
+                return ("已偏出赛道: 底部连续多步看不到路面, 已停车。"
+                        "调试图已存 " + config.CAMERA_DEBUG_DIR + "。"
                         "建议先用 get_status 确认位置, 再用 camera_probe 看画面颜色, "
                         "或 reset_position 回起点。")
             time.sleep(0.2)
             continue
 
         lost = 0
-        # 优先白边线中线, 退化为灰质心
         steer = det["steer_angle_deg"] or 0.0
-        eff_offset = det["white_center"] if det["white_ok"] else det["road_offset"]
+        eff_offset = det["road_offset"]
+        max_steer = config.TRACK_MAX_STEER_DEG
         steer = max(-max_steer, min(max_steer, steer))
         ok = agent.base.move_distance(math.radians(steer), step)
         if not ok:
@@ -432,8 +441,8 @@ def _follow_track(agent, args):
         steer_sum += abs(steer)
         agent.logger.info(
             f"[track] 步{steps} 偏移{eff_offset:+.2f} 转向{steer:+.1f}° "
-            f"(白线={'有' if det['white_ok'] else '无'}) "
-            f"灰{det['road_fraction']:.0%} 白{det['white_fraction']:.0%}"
+            f"(白线={'有' if det['white_ok'] else '无'}, 边纠{det['edge_bias']:+.0f}°) "
+            f"底灰{det['road_fraction']:.0%} 上灰{det['far_fraction']:.0%}"
         )
 
     agent.base.stop()
