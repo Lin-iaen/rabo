@@ -18,6 +18,7 @@ API 参考 (rabo_robocap.AgilexRangeMini3, 全向底盘):
 """
 
 import math
+import os
 import time
 
 from . import config
@@ -100,6 +101,33 @@ TOOLS = [
             "description": "完整演示全向底盘能力：前进 2 米 → 斜行 45° 平移 1 米 → "
                            "原地逆时针自转 90° → 回到起点 → 转回原朝向。",
             "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reset_position",
+            "description": "把机器人瞬间复位到世界原点 (0, 0, 0, 朝向 0)。"
+                           "用于小车跑偏/跑飞后重置测试起点。注意: 这是 Gazebo 位姿瞬移, "
+                           "里程计读数不一定自动归零。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "teleport",
+            "description": "把机器人瞬间传送到指定坐标 (x, y, 米) 并朝向 yaw_deg(度, 0=世界系正前)。"
+                           "用于跳转测试/跨过障碍/快速到达某点。位姿瞬移, 里程计读数不保证同步。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "x": {"type": "number", "description": "目标 x 坐标, 米"},
+                    "y": {"type": "number", "description": "目标 y 坐标, 米"},
+                    "yaw_deg": {"type": "number", "description": "目标朝向, 度 (0=世界系正前方)"},
+                },
+                "required": ["x", "y"],
+            },
         },
     },
 ]
@@ -214,6 +242,71 @@ def _run_demo_sequence(agent, args):
 
 
 # ══════════════════════════════════════════════════════════════════════
+#  复位 / 传送 (基于 rabo_dev_kit.SetEntityPose, 走 /world/<name>/set_pose)
+# ══════════════════════════════════════════════════════════════════════
+
+def _discover_world(agent):
+    """发现 Gazebo world 名: 优先用 config.WORLD, 否则扫 /world/<name>/set_pose 服务。"""
+    if config.WORLD:
+        return config.WORLD
+    from rclpy.node import Node
+
+    node = Node(f"world_probe_{os.getpid()}")
+    try:
+        names, _ = node.get_service_names_and_types()
+    finally:
+        node.destroy_node()
+    marker = "/world/"
+    for n in names:
+        if n.startswith(marker) and n.endswith("/set_pose"):
+            return n[len(marker):-len("/set_pose")]
+    raise RuntimeError(
+        "未找到 /world/<name>/set_pose 服务, 无法自动发现 Gazebo world。"
+        "请在 agents/chassis_agent/config.py 里设置 WORLD = '<world名>'。"
+    )
+
+
+def _get_pose_client(agent):
+    """懒创建 SetEntityPose 客户端并缓存 (world 只发现一次)。"""
+    client = getattr(agent, "_pose_client", None)
+    if client is None:
+        from rabo_dev_kit import SetEntityPose
+
+        world = _discover_world(agent)
+        client = SetEntityPose(world)
+        agent._pose_client = client
+        agent._pose_world = world
+        agent.logger.info(f"SetEntityPose 就绪, world={world}")
+    return client
+
+
+def _reset_position(agent, args):
+    try:
+        client = _get_pose_client(agent)
+    except Exception as e:
+        return f"复位失败: {e}"
+    ok = client.set(config.ROBOT_ID, (0.0, 0.0, 0.0, 0.0, 0.0, 0.0), timeout=10)
+    if not ok:
+        return "复位失败: SetEntityPose 调用超时或无响应"
+    return ("已将机器人复位到原点 (0, 0, 0, yaw=0)。注意: 这是位姿瞬移, 里程计读数不一定自动归零, "
+            "之后的移动会从当前位置继续累计。")
+
+
+def _teleport(agent, args):
+    x = args["x"]
+    y = args["y"]
+    yaw = math.radians(args.get("yaw_deg", 0))
+    try:
+        client = _get_pose_client(agent)
+    except Exception as e:
+        return f"传送失败: {e}"
+    ok = client.set(config.ROBOT_ID, (x, y, 0.0, 0.0, 0.0, yaw), timeout=10)
+    if not ok:
+        return "传送失败: SetEntityPose 调用超时或无响应"
+    return f"已传送到 ({x}, {y}, yaw={math.degrees(yaw):.1f}°)。注意: 里程计读数不保证同步。"
+
+
+# ══════════════════════════════════════════════════════════════════════
 #  调度表: tool name → handler
 # ══════════════════════════════════════════════════════════════════════
 
@@ -224,6 +317,8 @@ _HANDLERS = {
     "get_status": _get_status,
     "stop": _stop,
     "run_demo_sequence": _run_demo_sequence,
+    "reset_position": _reset_position,
+    "teleport": _teleport,
 }
 
 

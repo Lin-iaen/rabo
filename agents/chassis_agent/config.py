@@ -48,3 +48,8 @@ DEMO_TEXT = (
 # RemoteControl 的 WebSocket 地址 RABO_REMOTE_WS_URL 由平台运行环境自动注入, 无需配置。
 REMOTE_ID = "cd49223f86e236c29f9f5ea6876e39307"
 CHAT_CONTROL_ID = "chat-v1"
+
+# ── Gazebo world 名 (复位/传送工具用) ────────────────────────────────
+# 留空 = 运行时自动从 ROS 服务发现 (找 /world/<name>/set_pose);
+# 若自动发现失败, 填这里 (在仿真场景的 Gazebo world 名)。
+WORLD = ""
