@@ -24,10 +24,19 @@ MODE = "sim"
 DEFAULT_LINEAR_SPEED = 0.5      # m/s, cruise 工具默认线速度
 DEFAULT_ANGULAR_SPEED = 0.6     # rad/s, rotate 工具默认角速度
 
+# LLM 采样温度: 越高越有创意/越不稳定。0.7 = 有发挥空间又不至于太飘。
+# 想看更激进/更保守的发挥, 改这里即可 (0.0~1.0)。
+TEMPERATURE = 0.7
+
 # ── LLM 配置（rabo 平台自带大模型 API, OpenAI 兼容, 支持 function calling）──
 LLM_BASE_URL = "https://ai.rabo.cc/p/qwen"
 LLM_MODEL = "qwen3.6-flash"     # 复杂推理/代码可换 qwen3.6-plus
 LLM_API_KEY = os.getenv("RABO_LLM_KEY", "")
 
 # ── 无输入源方案：启动时发给 agent 的演示指令 ─────────────────────────
-DEMO_TEXT = "演示一下你的移动能力，走你的演示流程"
+# 开放式指令: 让 LLM 自由发挥 (阶段 A)。后续接面板后改走 REMOTE_ID 输入, 此项失效。
+DEMO_TEXT = (
+    "自由发挥：不要调用 run_demo_sequence，自己设计一套有创意的移动动作并执行"
+    "（例如平移、斜行、原地自转、短暂停顿的组合，也可以连续走一段再变换方向）。"
+    "中途可以调用 get_status 观察位姿，最后汇报你的设计思路和结果。"
+)

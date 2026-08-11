@@ -40,6 +40,8 @@ class ChassisAgent(BaseAgent):
         self.model = config.LLM_MODEL
         self.system_prompt = SYSTEM_PROMPT
         self.tools = TOOLS
+        # 覆盖基类采样温度 (默认 0.0 太死板), 见 config.TEMPERATURE
+        self.TEMPERATURE = config.TEMPERATURE
         self.setup_messages()
 
         self.logger.info(f"ChassisAgent 初始化完成, robot_id={config.ROBOT_ID}, mode={config.MODE}")
