@@ -45,6 +45,7 @@ def _panel_mode():
       可能耗时数秒), 期间不处理新的面板消息 —— 对单用户对话足够。
     """
     import rclpy
+    from rclpy.executors import SingleThreadedExecutor
     from rabo_dev_kit import RemoteControl
 
     log = logging.getLogger("ChassisAgent")
@@ -81,7 +82,14 @@ def _panel_mode():
     )
 
     try:
-        rclpy.spin(rc)
+        # 用专属 executor 自旋 RemoteControl, 把「全局 executor」留给 SetEntityPose 等
+        # 内部调用 rclpy.spin_until_future_complete 的 SDK 使用 —— 否则面板回调在全局
+        # executor 里再 spin 同一个全局 executor 会抛 "Executor is already spinning"。
+        executor = SingleThreadedExecutor()
+        try:
+            rclpy.spin(rc, executor=executor)
+        finally:
+            executor.shutdown()
     except KeyboardInterrupt:
         pass
     finally:
