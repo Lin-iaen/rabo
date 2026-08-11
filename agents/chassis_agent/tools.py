@@ -130,6 +130,30 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "camera_view",
+            "description": "用前视 RGB 相机看一眼赛道: 返回路面是否可见、路面中心相对视野的偏移"
+                           "(左/右)、建议转向角。沿赛道行驶时用它做观测。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "follow_track",
+            "description": "沿柏油赛道自动跟随行驶指定秒数 (闭环寻迹): 持续看相机把路面保持在"
+                           "视野中央, 若偏出赛道会自动停车并说明。完成后返回行驶距离与当前位姿。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "seconds": {"type": "number", "description": "跟随行驶时长, 秒 (建议 10~30)"},
+                },
+                "required": ["seconds"],
+            },
+        },
+    },
 ]
 
 
@@ -307,6 +331,79 @@ def _teleport(agent, args):
 
 
 # ══════════════════════════════════════════════════════════════════════
+#  赛道感知与跟随 (前视 RGB 相机, 灰黑柏油路 vs 绿色草坪)
+# ══════════════════════════════════════════════════════════════════════
+
+def _camera_view(agent, args):
+    from drivers import detect_road
+
+    frame = agent.camera.get_frame()
+    if frame is None:
+        return (
+            f"相机还没收到图像 (topic={config.CAMERA_IMAGE_TOPIC})。"
+            "请确认场景里相机已开启、话题名与 config.CAMERA_IMAGE_TOPIC 一致。"
+        )
+    det = detect_road(frame)
+    return det["status"]
+
+
+def _follow_track(agent, args):
+    """闭环寻迹: 反复"看相机 → 按路面偏移转向 → 前移一小步", 持续指定秒数。"""
+    from drivers import detect_road
+
+    duration = args["seconds"]
+    step = config.TRACK_STEP_M
+    max_steer = config.TRACK_MAX_STEER_DEG
+    lost_limit = config.TRACK_LOST_STEPS
+
+    start = time.time()
+    dist = 0.0
+    steps = 0
+    lost = 0
+    steer_sum = 0.0
+
+    while time.time() - start < duration:
+        frame = agent.camera.get_frame()
+        if frame is None:
+            lost += 1
+            if lost >= lost_limit:
+                agent.base.stop()
+                return "跟随失败: 长时间拿不到相机图像, 已停车。"
+            time.sleep(0.2)
+            continue
+
+        det = detect_road(frame)
+        if not det["road_visible"]:
+            lost += 1
+            if lost >= lost_limit:
+                agent.base.stop()
+                return ("已偏出赛道: 连续多步看不到柏油路面, 已停车。"
+                        "建议先用 get_status 确认位置, 再 reset_position 或倒回。")
+            time.sleep(0.2)
+            continue
+
+        lost = 0
+        steer = det["steer_angle_deg"] or 0.0
+        steer = max(-max_steer, min(max_steer, steer))
+        ok = agent.base.move_distance(math.radians(steer), step)
+        if not ok:
+            agent.base.stop()
+            return f"第 {steps + 1} 步移动失败, 已停车。"
+        dist += step
+        steps += 1
+        steer_sum += abs(steer)
+
+    agent.base.stop()
+    avg_steer = (steer_sum / steps) if steps else 0.0
+    x, y, theta = agent.base.get_odometry()
+    return (
+        f"沿赛道行驶完成: 约 {duration}s, 前进 {dist:.1f} m, 共 {steps} 步, "
+        f"平均转向量 {avg_steer:.1f}°。当前位姿=({x:.2f}, {y:.2f}, "
+        f"{math.degrees(theta):.2f}°)。"
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
 #  调度表: tool name → handler
 # ══════════════════════════════════════════════════════════════════════
 
@@ -319,6 +416,8 @@ _HANDLERS = {
     "run_demo_sequence": _run_demo_sequence,
     "reset_position": _reset_position,
     "teleport": _teleport,
+    "camera_view": _camera_view,
+    "follow_track": _follow_track,
 }
 
 

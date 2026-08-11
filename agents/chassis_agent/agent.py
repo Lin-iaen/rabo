@@ -32,7 +32,12 @@ class ChassisAgent(BaseAgent):
         # ── 1. 初始化底盘 ─────────────────────────────────────────
         self.base = self._create_base()
 
-        # ── 2. BaseAgent 协议要求的 4 个属性 ──────────────────────
+        # ── 2. 初始化相机 (RGB 前视, 赛道感知用) ─────────────────
+        # 相机回调必须在自己的后台 executor 线程里跑 —— 面板回调/工具执行占用的
+        # 线程不能同时服务传感器回调, 否则 follow_track 会一直读到旧帧。
+        self.camera = self._create_camera()
+
+        # ── 3. BaseAgent 协议要求的 4 个属性 ─────────────────────
         self.llm = OpenAI(
             base_url=config.LLM_BASE_URL,
             api_key=config.LLM_API_KEY,
@@ -60,16 +65,45 @@ class ChassisAgent(BaseAgent):
 
         return AgilexRangeMini3(robot_id=config.ROBOT_ID, mode=config.MODE)
 
+    @staticmethod
+    def _create_camera():
+        """创建相机订阅节点并放在独立 executor 线程里自旋, 返回 CameraNode。"""
+        from rclpy.executors import MultiThreadedExecutor
+
+        from drivers import CameraNode
+
+        cam = CameraNode(topic=config.CAMERA_IMAGE_TOPIC)
+        ex = MultiThreadedExecutor()
+        ex.add_node(cam.get_node())
+
+        import threading
+
+        thread = threading.Thread(target=ex.spin, name="camera_spin", daemon=True)
+        thread.start()
+
+        cam._executor = ex   # 保留引用, shutdown 时用
+        cam._thread = thread
+        return cam
+
     def execute_tool(self, name: str, args: dict) -> str:
         """BaseAgent 钩子: 把工具调度转给 tools 模块。"""
         return tools_module.execute_tool(self, name, args)
 
     def shutdown(self):
-        """释放底盘节点。"""
+        """释放底盘节点与相机线程。"""
         try:
             self.base.shutdown()
         except Exception as e:  # noqa: BLE001
             self.logger.warning(f"底盘 shutdown 异常: {e}")
+
+        cam = getattr(self, "camera", None)
+        if cam is not None:
+            try:
+                cam._executor.shutdown()
+                cam.destroy()
+                cam._thread.join(timeout=2)
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning(f"相机 shutdown 异常: {e}")
 
 
 def _demo_run():

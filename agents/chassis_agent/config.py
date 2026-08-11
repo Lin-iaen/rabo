@@ -53,3 +53,12 @@ CHAT_CONTROL_ID = "chat-v1"
 # 留空 = 运行时自动从 ROS 服务发现 (找 /world/<name>/set_pose);
 # 若自动发现失败, 填这里 (在仿真场景的 Gazebo world 名)。
 WORLD = ""
+
+# ── 相机 (场景里给小车加装的 RGBD 相机, 本次只用 RGB 图像) ──────────
+# 图像话题: 在场景的传感器面板里能看到, 形如 <相机名>/image。
+CAMERA_IMAGE_TOPIC = "rd43088_tp_rgbd_d724d13b23/image"
+
+# ── 赛道跟随 (寻迹) 参数 ─────────────────────────────────────────────
+TRACK_STEP_M = 0.3              # 闭环每步平移距离 (米), 越短越跟得紧/越慢
+TRACK_MAX_STEER_DEG = 30        # 最大转向角 (度), 路面偏移映射的上限
+TRACK_LOST_STEPS = 5            # 连续多少步看不到路面判定为偏出赛道
