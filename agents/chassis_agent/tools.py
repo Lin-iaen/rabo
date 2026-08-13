@@ -395,36 +395,18 @@ def _camera_probe(agent, args):
     )
 
 
-def _read_module_source(mod):
-    """读取模块源码 (优先走 zipimport 的 loader.get_source, 再退回 inspect)。"""
-    loader = getattr(mod, "__loader__", None)
-    get_source = getattr(loader, "get_source", None)
-    if get_source is not None:
-        try:
-            src = get_source(mod.__name__)
-            if src:
-                return src
-        except Exception:  # noqa: BLE001
-            pass
-    import inspect
-
-    try:
-        return inspect.getsource(mod)
-    except Exception:  # noqa: BLE001
-        return None
-
-
 def _sdk_probe(agent, args):
     """调试工具: 把底盘 SDK 源码导出到项目 sdk_dump/ 目录。
 
     rabo_robocap 顶层只是 loader shell, 真正实现在热更新到 ~/.rabo_robocap/*.zip 的
-    _rabo_core 里 (子包 mobile)。这里沿 AgilexRangeMini3 的 MRO 把每个类所在模块的完整
-    源码导出成 .py 文件, 写进项目 sdk_dump/, 便于在网页 VSCode 里直接点开查看 —— 无需
-    手动定位/解压 zip。导出后重点看 move_distance / rotate / set_velocity / get_odometry
-    这几个方法的方向帧与符号约定。
+    _rabo_core 里 (子包 mobile)。zipimport 的类无法用 inspect.getmodule/getsource 正常解析,
+    所以这里直接定位并解压 core zip, 把所有 .py 导出成 sdk_dump/core_*.py, 便于在网页
+    VSCode 里直接点开查看。导出后重点看 mobile 子包里 move_distance / rotate /
+    set_velocity / get_odometry 这几个方法的方向帧与符号约定。
     """
     import inspect
     import os
+    import zipfile
 
     try:
         from rabo_robocap import AgilexRangeMini3
@@ -434,31 +416,62 @@ def _sdk_probe(agent, args):
     outdir = os.path.join(os.getcwd(), "sdk_dump")
     os.makedirs(outdir, exist_ok=True)
 
-    dumped = []
+    lines = [f"AgilexRangeMini3 = {AgilexRangeMini3}"]
+    try:
+        lines.append(f"MRO = {[c.__name__ for c in AgilexRangeMini3.__mro__]}")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        lines.append(f"file = {inspect.getfile(AgilexRangeMini3)}")
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"file = <无法获取: {e}>")
+
+    # ── 1. 尽量直接导出 MRO 里每个类的源码 (zipimport 类可能失败, 故只是尽力) ──
     for cls in AgilexRangeMini3.__mro__:
         try:
-            defined_in = inspect.getfile(cls)
-        except TypeError:
-            continue
-        mod = inspect.getmodule(cls)
-        if mod is None:
-            continue
-        src = _read_module_source(mod)
-        if src is None:
+            src = inspect.getsource(cls)
+        except Exception:  # noqa: BLE001
+            src = None
+        if not src:
             continue
         path = os.path.join(outdir, f"{cls.__name__}.py")
         with open(path, "w") as fh:
-            fh.write(f"# class: {cls.__name__}\n")
-            fh.write(f"# module: {mod.__name__}\n")
-            fh.write(f"# defined_in: {defined_in}\n\n")
+            fh.write(f"# class: {cls.__name__}\n# module: {cls.__module__}\n\n")
             fh.write(src)
-        dumped.append((cls.__name__, path, defined_in))
-        agent.logger.info(f"[sdk_probe] {cls.__name__} -> {path} (defined in {defined_in})")
+        lines.append(f"dump class {cls.__name__} -> {path}")
+        agent.logger.info(f"[sdk_probe] class {cls.__name__} -> {path}")
 
-    if not dumped:
-        return "sdk_probe: 未能导出任何源码 (核心 zip 可能未就绪)。"
-    lines = [f"{name}: {path}" for name, path, _ in dumped]
-    return f"已导出底盘 SDK 源码到项目 sdk_dump/ 目录, 共 {len(dumped)} 个文件:\n" + "\n".join(lines)
+    # ── 2. 主路径: 直接解压 OSS core zip, 导出全部 .py ──
+    zip_path = None
+    try:
+        from rabo_robocap._updater import get_core_zip_path
+
+        zip_path = get_core_zip_path()
+    except Exception:  # noqa: BLE001
+        pass
+    if not zip_path:
+        try:
+            f = inspect.getfile(AgilexRangeMini3)
+            zip_path = f.split(".zip")[0] + ".zip"
+        except Exception:  # noqa: BLE001
+            pass
+
+    if zip_path and os.path.isfile(zip_path):
+        lines.append(f"core zip = {zip_path}")
+        try:
+            with zipfile.ZipFile(zip_path) as zf:
+                py_names = [n for n in zf.namelist() if n.endswith(".py")]
+                for n in py_names:
+                    rel = n.replace("/", "_").replace("\\", "_")
+                    with open(os.path.join(outdir, "core_" + rel), "wb") as fh:
+                        fh.write(zf.read(n))
+                lines.append(f"从 zip 导出 {len(py_names)} 个 .py 到 sdk_dump/core_*.py")
+        except Exception as e:  # noqa: BLE001
+            lines.append(f"解压 zip 失败: {e}")
+    else:
+        lines.append("未找到 core zip, 仅尝试导出类源码。")
+
+    return "\n".join(lines)
     """基于里程计闭环旋转到绝对朝向 target_deg (度, 0=世界系正前)。
 
     解决 timed-rotate 的角度漂移; 返回旋转后的实际朝向 (度)。
