@@ -474,54 +474,72 @@ def _sdk_probe(agent, args):
     return "\n".join(lines)
 
 
-def _rotate_abs(agent, target_deg):
-    """基于里程计闭环旋转到绝对朝向 target_deg (度, 0=世界系正前)。
+def _omni_wheel_targets(vx, vy, omega, wheel_positions, wheel_radius):
+    """复刻 SDK 的全向逆解: 由车体系 (vx, vy, omega) 求每个轮子的转向角与轮速。
 
-    比例控制: 角速度与角度误差成正比, 越接近目标转得越慢, 避免旧版固定角速度
-    + sleep 的 bang-bang 超调震荡 (那会让四个轮子来回反复扭动、原地打转)。
+    与 _rabo_core.base.omnidirectional_chassis_base.omni_wheel_targets 完全一致:
+      Vx = vx - omega*y;  Vy = vy + omega*x;  steer = atan2(Vy, Vx);  speed = mag/r
+    返回 (steers[rad], speeds[rad/s])。这样就能在 SDK 公开 API (纯平移/纯旋转) 之外
+    合成「平移 + 自转」的弧线运动。
     """
-    tol = config.TRACK_ROTATE_TOL_DEG
-    kp = config.TRACK_ROTATE_KP          # rad/s 每度误差
-    max_w = config.TRACK_MAX_ANGULAR_SPEED
+    steers, speeds = [], []
+    for x, y in wheel_positions:
+        Vx = vx - omega * y
+        Vy = vy + omega * x
+        mag = math.hypot(Vx, Vy)
+        if mag < 1e-9:
+            steers.append(0.0)
+            speeds.append(0.0)
+        else:
+            steers.append(math.atan2(Vy, Vx))
+            speeds.append(mag / wheel_radius)
+    return steers, speeds
 
-    for _ in range(200):
-        _, _, theta = agent.base.get_odometry()
-        cur = math.degrees(theta)
-        delta = (target_deg - cur + 180.0) % 360.0 - 180.0   # -180..180
-        if abs(delta) <= tol:
-            break
-        w = max(-max_w, min(max_w, kp * delta))
-        if abs(w) < 0.05:                 # 快到位时给最小角速度, 避免卡死
-            w = math.copysign(0.05, delta)
-        agent.base.rotate(w, blocking=False)
-        time.sleep(0.02)
 
-    agent.base.stop()
-    return math.degrees(agent.base.get_odometry()[2])
+def _set_twist(agent, vx, vy, omega):
+    """把车体系 (vx, vy, omega) 直接写到服务端控制目标, 实现全向弧线运动。
+
+    sim 模式下 agent.base 是 OmniChassisClient, 它持有 _server (本进程内的
+    OmnidirectionalChassisBase 节点)。直接调 _server._set_targets 把逆解后的轮子
+    目标写进去, 由服务端 50Hz 控制回路平滑执行 —— 这是绕过 SDK 只暴露纯平移/纯旋转、
+    且「转向时不动」限制的关键, 让车能一边前进一边转弯而不必停-转-停。
+    """
+    server = getattr(agent.base, "_server", None)
+    if server is None:
+        raise RuntimeError("无法访问底盘服务端节点 (_server 不存在), 合成运动不可用")
+    steers, speeds = _omni_wheel_targets(
+        vx, vy, omega,
+        wheel_positions=server.WHEEL_POSITIONS,
+        wheel_radius=server.WHEEL_RADIUS,
+    )
+    server._set_targets(steers, speeds)
 
 
 def _follow_track(agent, args):
-    """闭环寻迹 (纯追踪 + 平滑航向控制), 持续指定秒数。
+    """闭环寻迹 (全向弧线跟随), 持续指定秒数。
 
-    每步: 看相机 → 算路面远心相对车头的偏角 steer → 超死区则平滑旋转车身指向远心 →
-    直行一小段。关键改进: ①旋转用比例角速度, 不再 bang-bang 超调震荡; ②加航向死区,
-    直线/微偏时不转车身 (避免每步都停-转-停、四个轮子来回扭动)。
+    用合成运动 (前向 + 横向修正 + 航向跟随) 让车沿平滑弧线走, 不再「停-转-折线」。
+    每周期: 看相机 → 算偏移/偏角 → 把 (vx, vy, omega) 经 _omni_wheel_targets 逆解后
+    写进服务端 _set_targets, 由 50Hz 控制回路平滑执行。这是全向底盘的本命用法。
     """
     from drivers import detect_road
 
     duration = args["seconds"]
-    step = config.TRACK_STEP_M
-    max_steer = config.TRACK_MAX_STEER_DEG
+    speed = config.TRACK_SPEED
+    dt = config.TRACK_CTRL_DT
     lost_limit = config.TRACK_LOST_STEPS
+    k_lat = config.TRACK_LAT_GAIN
+    k_yaw = config.TRACK_YAW_GAIN
+    max_vy = config.TRACK_MAX_VY
+    max_omega = config.TRACK_MAX_OMEGA
     smooth = config.TRACK_STEER_SMOOTH
-    deadband = config.TRACK_HEADING_DEADBAND_DEG
 
     start = time.time()
-    dist = 0.0
-    steps = 0
     lost = 0
-    steer_sum = 0.0
+    prev_offset = 0.0
     prev_steer = 0.0
+    last_log = 0.0
+    x0, y0, _ = agent.base.get_odometry()
 
     while time.time() - start < duration:
         frame = agent.camera.get_frame()
@@ -530,7 +548,7 @@ def _follow_track(agent, args):
             if lost >= lost_limit:
                 agent.base.stop()
                 return "跟随失败: 长时间拿不到相机图像, 已停车。"
-            time.sleep(0.2)
+            time.sleep(0.1)
             continue
 
         det = detect_road(frame, config.VISION)
@@ -543,46 +561,50 @@ def _follow_track(agent, args):
                     save_debug(frame, config.VISION, outdir=config.CAMERA_DEBUG_DIR)
                 except Exception:  # noqa: BLE001
                     pass
-                return ("已偏出赛道: 底部连续多步看不到路面, 已停车。"
-                        "调试图已存 " + config.CAMERA_DEBUG_DIR + "。"
-                        "建议先用 get_status 确认位置, 再用 camera_probe 看画面颜色, "
-                        "或 reset_position 回起点。")
-            time.sleep(0.2)
+                return ("已偏出赛道: 连续多步看不到路面, 已停车。"
+                        "调试图已存 " + config.CAMERA_DEBUG_DIR + "。")
+            # 短暂丢失: 原地减速等待, 不继续冲
+            _set_twist(agent, 0.0, 0.0, 0.0)
+            time.sleep(0.1)
             continue
 
         lost = 0
-        raw_steer = det["steer_angle_deg"] or 0.0
-        steer = smooth * raw_steer + (1.0 - smooth) * prev_steer   # EMA 平滑
-        steer = max(-max_steer, min(max_steer, steer))
-        prev_steer = steer
+        offset = det["road_offset"] or 0.0            # + 右, -1..1
+        steer_deg = det["steer_angle_deg"] or 0.0     # + 左转
 
-        # 纯追踪: 车身指向路面远心再直行; 只有航向误差超死区才转车身。
-        _, _, theta = agent.base.get_odometry()
-        if abs(steer) > deadband:
-            _rotate_abs(agent, math.degrees(theta) + steer)
+        # EMA 平滑
+        offset = smooth * offset + (1.0 - smooth) * prev_offset
+        steer_deg = smooth * steer_deg + (1.0 - smooth) * prev_steer
+        prev_offset, prev_steer = offset, steer_deg
 
-        ok = agent.base.move_distance(0.0, step)
-        if not ok:
+        vx = speed
+        vy = max(-max_vy, min(max_vy, -k_lat * offset * speed))
+        omega = max(-max_omega, min(max_omega, k_yaw * math.radians(steer_deg)))
+
+        try:
+            _set_twist(agent, vx, vy, omega)
+        except Exception as e:  # noqa: BLE001
             agent.base.stop()
-            return f"第 {steps + 1} 步移动失败, 已停车。"
-        dist += step
-        steps += 1
-        steer_sum += abs(steer)
+            return f"合成运动控制失败: {e}"
 
-        _, _, theta = agent.base.get_odometry()
-        agent.logger.info(
-            f"[track] 步{steps} 偏移{det['road_offset'] if det['road_offset'] is not None else 0:+.2f} "
-            f"转向{steer:+.1f}° (边纠{det['edge_bias']:+.0f}°) 朝向{math.degrees(theta):.0f}° "
-            f"底灰{det['road_fraction']:.0%} 上灰{det['far_fraction']:.0%}"
-        )
+        t = time.time() - start
+        if t - last_log >= 0.5:
+            last_log = t
+            _, _, theta = agent.base.get_odometry()
+            agent.logger.info(
+                f"[track] {t:.1f}s 偏移{offset:+.2f} 偏角{steer_deg:+.1f}° "
+                f"vy={vy:+.2f} ω={omega:+.2f} 朝向{math.degrees(theta):.0f}° "
+                f"底灰{det['road_fraction']:.0%} 上灰{det['far_fraction']:.0%}"
+            )
+
+        time.sleep(dt)
 
     agent.base.stop()
-    avg_steer = (steer_sum / steps) if steps else 0.0
     x, y, theta = agent.base.get_odometry()
+    traveled = math.hypot(x - x0, y - y0)
     return (
-        f"沿赛道行驶完成: 约 {duration}s, 前进 {dist:.1f} m, 共 {steps} 步, "
-        f"平均转向量 {avg_steer:.1f}°。当前位姿=({x:.2f}, {y:.2f}, "
-        f"{math.degrees(theta):.2f}°)。"
+        f"沿赛道行驶完成: 约 {duration}s, 前进 {traveled:.1f} m。"
+        f"当前位姿=({x:.2f}, {y:.2f}, {math.degrees(theta):.2f}°)。"
     )
 
 

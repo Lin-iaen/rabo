@@ -59,14 +59,15 @@ WORLD = ""
 CAMERA_IMAGE_TOPIC = "rd43088_tp_rgbd_d724d13b23/image"
 
 # ── 赛道跟随 (寻迹) 参数 ─────────────────────────────────────────────
-TRACK_STEP_M = 0.25             # 闭环每步直行距离 (米), 越短越跟得紧/越平滑
-TRACK_MAX_STEER_DEG = 30        # 单步最大转向 (度)
-TRACK_LOST_STEPS = 5            # 连续多少步看不到路面判定为偏出赛道
-TRACK_ROTATE_TOL_DEG = 2.0      # 旋转到位容差 (度, 里程计闭环)
-TRACK_STEER_SMOOTH = 0.6        # 转向 EMA 平滑系数 (0~1, 越大越跟手/越抖)
-TRACK_HEADING_DEADBAND_DEG = 6  # 航向死区 (度): 偏角低于此不转车身, 只直行
-TRACK_ROTATE_KP = 0.03          # 旋转比例增益 (rad/s 每度误差)
-TRACK_MAX_ANGULAR_SPEED = 0.8   # 旋转最大角速度 (rad/s)
+TRACK_SPEED = 0.4              # 寻迹前进速度 (m/s)
+TRACK_MAX_STEER_DEG = 30       # 感知单帧最大偏角 (度), 也用于 clamp detect_road 输出
+TRACK_LOST_STEPS = 5           # 连续多少周期看不到路面判定为偏出赛道
+TRACK_STEER_SMOOTH = 0.6       # 偏角/偏移 EMA 平滑系数 (0~1, 越大越跟手/越抖)
+TRACK_CTRL_DT = 0.05           # 控制周期 (秒): 每周期看相机更新一次合成速度
+TRACK_LAT_GAIN = 0.5           # 横向修正增益 (vy = -gain * offset * speed)
+TRACK_YAW_GAIN = 1.2           # 航向跟随增益 (omega = gain * steer_rad)
+TRACK_MAX_VY = 0.3             # 横向速度上限 (m/s)
+TRACK_MAX_OMEGA = 0.8          # 自转角速度上限 (rad/s)
 
 # ── 赛道感知校准 (HSV 阈值) ──────────────────────────────────────────
 # 场景: 灰黑柏油路面 + 白色边界线 + 黑白相间路缘 + 绿色草坪背景。
@@ -76,11 +77,11 @@ CAMERA_DEBUG_DIR = "/tmp/chassis_cam_debug"
 VISION = {
     "steer_band": (0.10, 0.55),   # 转向信号带 (y 归一化): 灰质心主转向, 含弯道延续
     "bottom_y": 0.60,             # 底部段起点: "是否在路上" + "是否贴近边线"
-    "grass_h_range": (35, 85),    # 草坪色相区间
-    "grass_s_min": 60,
-    "grass_v_min": 60,
+    "grass_h_range": (30, 90),    # 草坪色相区间 (放宽, 覆盖黯淡浅绿)
+    "grass_s_min": 25,            # 草坪饱和度下限 (调低: 黯淡草坪饱和度低)
+    "grass_v_min": 40,            # 草坪明度下限 (调低: 黯淡草坪偏暗)
     "asphalt_s_max": 60,          # 沥青: 饱和度上限
-    "asphalt_v_min": 40,          # 沥青: 明度下限
+    "asphalt_v_min": 40,          # 沥青: 明度下限 (排除纯黑/路缘黑段)
     "asphalt_v_max": 200,         # 沥青: 明度上限 (排除白线)
     "white_s_max": 60,            # 白线: 饱和度上限
     "white_v_min": 190,           # 白线: 明度下限

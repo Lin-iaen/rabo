@@ -83,6 +83,33 @@ def _merge(vision):
     return params
 
 
+def _classify(bgr, vision=None):
+    """按 HSV 阈值把一帧分成 grass / asphalt / white / dark 掩码。
+
+    统一供 detect_road / probe_scene / save_debug 复用, 避免三处阈值逻辑漂移。
+    关键: 沥青 = 低饱和 + 中明度 + **非绿色相**。之前沥青不检查色相, 暗绿草坪
+    (饱和低、明度低) 会被误判成灰沥青路; 这里用 grass_hue 把绿色相像素从沥青里
+    排除, 无论草坪多黯淡都不会被当成跑道。
+    """
+    p = _merge(vision)
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    h_ch = hsv[:, :, 0].astype(np.int16)
+    s_ch = hsv[:, :, 1].astype(np.int16)
+    v_ch = hsv[:, :, 2].astype(np.int16)
+
+    gh0, gh1 = p["grass_h_range"]
+    grass_hue = (h_ch >= gh0) & (h_ch <= gh1)
+    grass = grass_hue & (s_ch >= p["grass_s_min"]) & (v_ch >= p["grass_v_min"])
+    asphalt = (
+        (s_ch < p["asphalt_s_max"])
+        & (v_ch >= p["asphalt_v_min"]) & (v_ch <= p["asphalt_v_max"])
+        & ~grass_hue
+    )
+    white = (s_ch < p["white_s_max"]) & (v_ch >= p["white_v_min"])
+    dark = v_ch < p["asphalt_v_min"]
+    return p, asphalt, white, grass, dark
+
+
 def _column_runs(mask, min_frac=0.04):
     """找出"纵向白像素数超阈值"的连续列区间, 返回 [(start, end), ...]。
 
@@ -119,24 +146,8 @@ def detect_road(bgr, vision=None):
         edge_bias:       底部边线纠正量 (度)
         status:          人读描述
     """
-    p = _merge(vision)
+    p, asphalt, white, grass, dark = _classify(bgr, vision)
     h, w = bgr.shape[:2]
-    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-
-    h_ch = hsv[:, :, 0].astype(np.int16)
-    s_ch = hsv[:, :, 1].astype(np.int16)
-    v_ch = hsv[:, :, 2].astype(np.int16)
-
-    gh0, gh1 = p["grass_h_range"]
-    grass = (
-        (h_ch >= gh0) & (h_ch <= gh1)
-        & (s_ch >= p["grass_s_min"]) & (v_ch >= p["grass_v_min"])
-    )
-    asphalt = (
-        (s_ch < p["asphalt_s_max"])
-        & (v_ch >= p["asphalt_v_min"]) & (v_ch <= p["asphalt_v_max"])
-    )
-    white = (s_ch < p["white_s_max"]) & (v_ch >= p["white_v_min"])
 
     # ── 底部段: 是否在路面上 + 是否贴近边线 ──────────────────
     by = int(h * p["bottom_y"])
@@ -235,15 +246,7 @@ def detect_road(bgr, vision=None):
 
 def probe_scene(bgr, vision=None):
     """调试用: 输出底部段与上/中段的 绿草/灰沥青/白线/暗部/其它 像素占比。"""
-    p = _merge(vision)
-    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-    h_ch, s_ch, v_ch = (hsv[:, :, 0].astype(np.int16), hsv[:, :, 1].astype(np.int16),
-                        hsv[:, :, 2].astype(np.int16))
-    gh0, gh1 = p["grass_h_range"]
-    grass = ((h_ch >= gh0) & (h_ch <= gh1) & (s_ch >= p["grass_s_min"]) & (v_ch >= p["grass_v_min"]))
-    asphalt = ((s_ch < p["asphalt_s_max"]) & (v_ch >= p["asphalt_v_min"]) & (v_ch <= p["asphalt_v_max"]))
-    white = ((s_ch < p["white_s_max"]) & (v_ch >= p["white_v_min"]))
-    dark = v_ch < p["asphalt_v_min"]
+    p, asphalt, white, grass, dark = _classify(bgr, vision)
 
     def pct(mask, rows):
         sub = mask[rows, :]
@@ -265,14 +268,7 @@ def save_debug(bgr, vision=None, outdir="/tmp/chassis_cam_debug"):
     """把当前帧 + 各类掩码存成 PNG, 返回文件路径列表。用于查看相机到底看到了什么。"""
     import os
 
-    p = _merge(vision)
-    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-    gh0, gh1 = p["grass_h_range"]
-    grass = ((hsv[:, :, 0] >= gh0) & (hsv[:, :, 0] <= gh1)
-             & (hsv[:, :, 1] >= p["grass_s_min"]) & (hsv[:, :, 2] >= p["grass_v_min"]))
-    asphalt = ((hsv[:, :, 1] < p["asphalt_s_max"])
-               & (hsv[:, :, 2] >= p["asphalt_v_min"]) & (hsv[:, :, 2] <= p["asphalt_v_max"]))
-    white = ((hsv[:, :, 1] < p["white_s_max"]) & (hsv[:, :, 2] >= p["white_v_min"]))
+    _, asphalt, white, grass, _ = _classify(bgr, vision)
 
     os.makedirs(outdir, exist_ok=True)
     paths = []
