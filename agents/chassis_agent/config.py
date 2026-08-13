@@ -59,11 +59,14 @@ WORLD = ""
 CAMERA_IMAGE_TOPIC = "rd43088_tp_rgbd_d724d13b23/image"
 
 # ── 赛道跟随 (寻迹) 参数 ─────────────────────────────────────────────
-TRACK_STEP_M = 0.2              # 闭环每步直行距离 (米), 越短越跟得紧/越平滑
+TRACK_STEP_M = 0.25             # 闭环每步直行距离 (米), 越短越跟得紧/越平滑
 TRACK_MAX_STEER_DEG = 30        # 单步最大转向 (度)
 TRACK_LOST_STEPS = 5            # 连续多少步看不到路面判定为偏出赛道
-TRACK_ROTATE_TOL_DEG = 2.0      # 转向到位容差 (度, 里程计闭环)
+TRACK_ROTATE_TOL_DEG = 2.0      # 旋转到位容差 (度, 里程计闭环)
 TRACK_STEER_SMOOTH = 0.6        # 转向 EMA 平滑系数 (0~1, 越大越跟手/越抖)
+TRACK_HEADING_DEADBAND_DEG = 6  # 航向死区 (度): 偏角低于此不转车身, 只直行
+TRACK_ROTATE_KP = 0.03          # 旋转比例增益 (rad/s 每度误差)
+TRACK_MAX_ANGULAR_SPEED = 0.8   # 旋转最大角速度 (rad/s)
 
 # ── 赛道感知校准 (HSV 阈值) ──────────────────────────────────────────
 # 场景: 灰黑柏油路面 + 白色边界线 + 黑白相间路缘 + 绿色草坪背景。

@@ -460,41 +460,52 @@ def _sdk_probe(agent, args):
         lines.append(f"core zip = {zip_path}")
         try:
             with zipfile.ZipFile(zip_path) as zf:
-                py_names = [n for n in zf.namelist() if n.endswith(".py")]
+                py_names = [n for n in zf.namelist() if n.endswith((".py", ".pyc"))]
                 for n in py_names:
                     rel = n.replace("/", "_").replace("\\", "_")
                     with open(os.path.join(outdir, "core_" + rel), "wb") as fh:
                         fh.write(zf.read(n))
-                lines.append(f"从 zip 导出 {len(py_names)} 个 .py 到 sdk_dump/core_*.py")
+                lines.append(f"从 zip 导出 {len(py_names)} 个文件 (含 .pyc 字节码) 到 sdk_dump/core_*")
         except Exception as e:  # noqa: BLE001
             lines.append(f"解压 zip 失败: {e}")
     else:
         lines.append("未找到 core zip, 仅尝试导出类源码。")
 
     return "\n".join(lines)
+
+
+def _rotate_abs(agent, target_deg):
     """基于里程计闭环旋转到绝对朝向 target_deg (度, 0=世界系正前)。
 
-    解决 timed-rotate 的角度漂移; 返回旋转后的实际朝向 (度)。
+    比例控制: 角速度与角度误差成正比, 越接近目标转得越慢, 避免旧版固定角速度
+    + sleep 的 bang-bang 超调震荡 (那会让四个轮子来回反复扭动、原地打转)。
     """
     tol = config.TRACK_ROTATE_TOL_DEG
-    for _ in range(80):
+    kp = config.TRACK_ROTATE_KP          # rad/s 每度误差
+    max_w = config.TRACK_MAX_ANGULAR_SPEED
+
+    for _ in range(200):
         _, _, theta = agent.base.get_odometry()
         cur = math.degrees(theta)
         delta = (target_deg - cur + 180.0) % 360.0 - 180.0   # -180..180
         if abs(delta) <= tol:
             break
-        w = math.copysign(config.DEFAULT_ANGULAR_SPEED, math.radians(delta))
+        w = max(-max_w, min(max_w, kp * delta))
+        if abs(w) < 0.05:                 # 快到位时给最小角速度, 避免卡死
+            w = math.copysign(0.05, delta)
         agent.base.rotate(w, blocking=False)
-        time.sleep(0.15)
+        time.sleep(0.02)
+
     agent.base.stop()
     return math.degrees(agent.base.get_odometry()[2])
 
 
 def _follow_track(agent, args):
-    """闭环寻迹: 每步"看相机 → 转到目标朝向 → 直行一小段", 持续指定秒数。
+    """闭环寻迹 (纯追踪 + 平滑航向控制), 持续指定秒数。
 
-    用「先转向再直行」而非斜向平移: 车头随弯道转, 相机始终对着路, 不会丢画面;
-    转向角用 EMA 平滑, 轨迹是弧线而不是楼梯。
+    每步: 看相机 → 算路面远心相对车头的偏角 steer → 超死区则平滑旋转车身指向远心 →
+    直行一小段。关键改进: ①旋转用比例角速度, 不再 bang-bang 超调震荡; ②加航向死区,
+    直线/微偏时不转车身 (避免每步都停-转-停、四个轮子来回扭动)。
     """
     from drivers import detect_road
 
@@ -503,6 +514,7 @@ def _follow_track(agent, args):
     max_steer = config.TRACK_MAX_STEER_DEG
     lost_limit = config.TRACK_LOST_STEPS
     smooth = config.TRACK_STEER_SMOOTH
+    deadband = config.TRACK_HEADING_DEADBAND_DEG
 
     start = time.time()
     dist = 0.0
@@ -544,10 +556,11 @@ def _follow_track(agent, args):
         steer = max(-max_steer, min(max_steer, steer))
         prev_steer = steer
 
-        # 先原地转向到目标朝向, 再直行一小段
+        # 纯追踪: 车身指向路面远心再直行; 只有航向误差超死区才转车身。
         _, _, theta = agent.base.get_odometry()
-        target = math.degrees(theta) + steer
-        _rotate_abs(agent, target)
+        if abs(steer) > deadband:
+            _rotate_abs(agent, math.degrees(theta) + steer)
+
         ok = agent.base.move_distance(0.0, step)
         if not ok:
             agent.base.stop()
