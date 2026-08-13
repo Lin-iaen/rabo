@@ -164,6 +164,16 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "sdk_probe",
+            "description": "调试工具: 把底盘 SDK (rabo_robocap AgilexRangeMini3 及其基类) 的实际"
+                           "源码导出到项目 sdk_dump/ 目录, 用于核实 move_distance/rotate/"
+                           "get_odometry 等方法的运动方向帧与符号约定。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 ]
 
 
@@ -385,7 +395,70 @@ def _camera_probe(agent, args):
     )
 
 
-def _rotate_abs(agent, target_deg):
+def _read_module_source(mod):
+    """读取模块源码 (优先走 zipimport 的 loader.get_source, 再退回 inspect)。"""
+    loader = getattr(mod, "__loader__", None)
+    get_source = getattr(loader, "get_source", None)
+    if get_source is not None:
+        try:
+            src = get_source(mod.__name__)
+            if src:
+                return src
+        except Exception:  # noqa: BLE001
+            pass
+    import inspect
+
+    try:
+        return inspect.getsource(mod)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _sdk_probe(agent, args):
+    """调试工具: 把底盘 SDK 源码导出到项目 sdk_dump/ 目录。
+
+    rabo_robocap 顶层只是 loader shell, 真正实现在热更新到 ~/.rabo_robocap/*.zip 的
+    _rabo_core 里 (子包 mobile)。这里沿 AgilexRangeMini3 的 MRO 把每个类所在模块的完整
+    源码导出成 .py 文件, 写进项目 sdk_dump/, 便于在网页 VSCode 里直接点开查看 —— 无需
+    手动定位/解压 zip。导出后重点看 move_distance / rotate / set_velocity / get_odometry
+    这几个方法的方向帧与符号约定。
+    """
+    import inspect
+    import os
+
+    try:
+        from rabo_robocap import AgilexRangeMini3
+    except Exception as e:
+        return f"sdk_probe 失败: 无法导入 AgilexRangeMini3 ({e})"
+
+    outdir = os.path.join(os.getcwd(), "sdk_dump")
+    os.makedirs(outdir, exist_ok=True)
+
+    dumped = []
+    for cls in AgilexRangeMini3.__mro__:
+        try:
+            defined_in = inspect.getfile(cls)
+        except TypeError:
+            continue
+        mod = inspect.getmodule(cls)
+        if mod is None:
+            continue
+        src = _read_module_source(mod)
+        if src is None:
+            continue
+        path = os.path.join(outdir, f"{cls.__name__}.py")
+        with open(path, "w") as fh:
+            fh.write(f"# class: {cls.__name__}\n")
+            fh.write(f"# module: {mod.__name__}\n")
+            fh.write(f"# defined_in: {defined_in}\n\n")
+            fh.write(src)
+        dumped.append((cls.__name__, path, defined_in))
+        agent.logger.info(f"[sdk_probe] {cls.__name__} -> {path} (defined in {defined_in})")
+
+    if not dumped:
+        return "sdk_probe: 未能导出任何源码 (核心 zip 可能未就绪)。"
+    lines = [f"{name}: {path}" for name, path, _ in dumped]
+    return f"已导出底盘 SDK 源码到项目 sdk_dump/ 目录, 共 {len(dumped)} 个文件:\n" + "\n".join(lines)
     """基于里程计闭环旋转到绝对朝向 target_deg (度, 0=世界系正前)。
 
     解决 timed-rotate 的角度漂移; 返回旋转后的实际朝向 (度)。
@@ -503,6 +576,7 @@ _HANDLERS = {
     "camera_view": _camera_view,
     "camera_probe": _camera_probe,
     "follow_track": _follow_track,
+    "sdk_probe": _sdk_probe,
 }
 
 
