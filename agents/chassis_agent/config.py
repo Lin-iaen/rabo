@@ -68,6 +68,7 @@ TRACK_LAT_GAIN = 0.5           # 横向修正增益 (vy = -gain * offset * speed
 TRACK_YAW_GAIN = 1.2           # 航向跟随增益 (omega = gain * steer_rad)
 TRACK_MAX_VY = 0.3             # 横向速度上限 (m/s)
 TRACK_MAX_OMEGA = 0.8          # 自转角速度上限 (rad/s)
+TRACK_SLOW_GAIN = 2.5          # 曲率减速增益: 偏角越大越慢 (0=不减速)
 
 # ── 赛道感知校准 (HSV 阈值) ──────────────────────────────────────────
 # 场景: 灰黑柏油路面 + 白色边界线 + 黑白相间路缘 + 绿色草坪背景。
@@ -75,7 +76,7 @@ TRACK_MAX_OMEGA = 0.8          # 自转角速度上限 (rad/s)
 CAMERA_DEBUG_DIR = "/tmp/chassis_cam_debug"
 
 VISION = {
-    "steer_band": (0.10, 0.55),   # 转向信号带 (y 归一化): 灰质心主转向, 含弯道延续
+    "steer_band": (0.15, 0.60),   # 转向信号带 (y 归一化): 略向下移, 弯道时路更不容易出画
     "bottom_y": 0.60,             # 底部段起点: "是否在路上" + "是否贴近边线"
     "grass_h_range": (30, 90),    # 草坪色相区间 (放宽, 覆盖黯淡浅绿)
     "grass_s_min": 25,            # 草坪饱和度下限 (调低: 黯淡草坪饱和度低)

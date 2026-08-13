@@ -533,6 +533,7 @@ def _follow_track(agent, args):
     max_vy = config.TRACK_MAX_VY
     max_omega = config.TRACK_MAX_OMEGA
     smooth = config.TRACK_STEER_SMOOTH
+    slow_gain = config.TRACK_SLOW_GAIN
 
     start = time.time()
     lost = 0
@@ -548,6 +549,7 @@ def _follow_track(agent, args):
             if lost >= lost_limit:
                 agent.base.stop()
                 return "跟随失败: 长时间拿不到相机图像, 已停车。"
+            _set_twist(agent, 0.0, 0.0, 0.0)
             time.sleep(0.1)
             continue
 
@@ -563,9 +565,13 @@ def _follow_track(agent, args):
                     pass
                 return ("已偏出赛道: 连续多步看不到路面, 已停车。"
                         "调试图已存 " + config.CAMERA_DEBUG_DIR + "。")
-            # 短暂丢失: 原地减速等待, 不继续冲
-            _set_twist(agent, 0.0, 0.0, 0.0)
-            time.sleep(0.1)
+            # 短暂丢失 (弯道里路面暂时只剩一侧/出画): 保持上一周期偏角继续转,
+            # 让车头继续摆向赛道方向、相机重新看到路, 而不是原地停住丢失。
+            steer_deg = prev_steer
+            vx = speed * 0.3
+            omega = max(-max_omega, min(max_omega, k_yaw * math.radians(steer_deg)))
+            _set_twist(agent, vx, 0.0, omega)
+            time.sleep(dt)
             continue
 
         lost = 0
@@ -577,8 +583,9 @@ def _follow_track(agent, args):
         steer_deg = smooth * steer_deg + (1.0 - smooth) * prev_steer
         prev_offset, prev_steer = offset, steer_deg
 
-        vx = speed
-        vy = max(-max_vy, min(max_vy, -k_lat * offset * speed))
+        # 曲率自适应减速: 偏角越大 (弯越急) 越慢, 给相机与车头转向留出时间
+        vx = speed / (1.0 + slow_gain * abs(steer_deg) / config.TRACK_MAX_STEER_DEG)
+        vy = max(-max_vy, min(max_vy, -k_lat * offset * vx))
         omega = max(-max_omega, min(max_omega, k_yaw * math.radians(steer_deg)))
 
         try:

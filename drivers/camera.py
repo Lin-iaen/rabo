@@ -59,7 +59,7 @@ def decode_image(msg):
 #   3) 「上段」两条白线成对可见时, 用其中点精修转向角。
 
 _DEFAULTS = {
-    "steer_band": (0.10, 0.55),   # 转向信号带 (y 归一化): 灰质心主转向, 含弯道延续
+    "steer_band": (0.15, 0.60),   # 转向信号带 (y 归一化): 略向下移, 弯道时路更不容易出画
     "bottom_y": 0.60,             # 底部段起点: "是否在路上" + "是否贴近边线"
     "grass_h_range": (35, 85),    # 草坪色相区间
     "grass_s_min": 60,
@@ -173,7 +173,7 @@ def detect_road(bgr, vision=None):
     bw = band_gray.shape[1]
     far_frac = float(band_gray.sum()) / band_gray.size
     far_offset = far_steer = None
-    if band_gray.sum() > band_gray.size * 0.005:
+    if band_gray.sum() > band_gray.size * 0.003:
         cols = np.where(band_gray.any(axis=0))[0]
         cx = float(cols.mean()) / bw
         far_offset = (cx - 0.5) * 2.0
